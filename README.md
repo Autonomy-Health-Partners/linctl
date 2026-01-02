@@ -141,8 +141,11 @@ linctl issue update LIN-123 --state "In Progress"
 linctl issue update LIN-123 --priority 1  # 0=None, 1=Urgent, 2=High, 3=Normal, 4=Low
 linctl issue update LIN-123 --due-date "2024-12-31"
 linctl issue update LIN-123 --due-date ""  # Remove due date
+linctl issue update LIN-123 --estimate 3  # Set estimate to 3 points
+linctl issue update LIN-123 --estimate -1  # Remove estimate
 linctl issue update LIN-123 --parent LIN-456  # Set parent issue
 linctl issue update LIN-123 --parent none  # Remove parent
+linctl issue update LIN-123 --related LIN-789  # Mark as related to another issue
 
 # Update multiple fields at once
 linctl issue update LIN-123 --title "Critical Bug" --assignee me --priority 1
@@ -263,7 +266,9 @@ linctl issue edit <issue-id> [flags]    # Alias
   -s, --state string       State name (e.g., 'Todo', 'In Progress', 'Done')
   --priority int           Priority (0=None, 1=Urgent, 2=High, 3=Normal, 4=Low)
   --due-date string        Due date (YYYY-MM-DD format, or empty to remove)
+  --estimate float         Estimate points (use -1 to remove)
   --parent string          Parent issue ID/identifier (or 'none' to remove parent)
+  --related string         Mark as related to another issue (by ID or identifier)
 
 # Archive issue (coming soon)
 linctl issue archive <issue-id>
@@ -310,8 +315,33 @@ linctl project ls [flags]     # Alias
 linctl project get <project-id>
 linctl project show <project-id>  # Alias
 
-# Create project (coming soon)
-linctl project create [flags]
+# Create project
+linctl project create --name "Project Name" --team ENG [flags]
+# Flags:
+  --name string            Project name (required)
+  -t, --team strings       Team key(s) (required, comma-separated for multiple)
+  -d, --description string Project description
+  -s, --state string       Initial state (planned, started, paused)
+  --lead string            Project lead (email, name, or 'me')
+  --start-date string      Start date (YYYY-MM-DD)
+  --target-date string     Target date (YYYY-MM-DD)
+  --color string           Project color (hex code)
+
+# Update project
+linctl project update <project-id> [flags]
+# Flags:
+  --name string            New project name
+  -d, --description string New description
+  -s, --state string       State (planned, started, paused, completed, canceled)
+  --lead string            Project lead (email, name, 'me', or 'none' to remove)
+  --start-date string      Start date (YYYY-MM-DD, or empty to remove)
+  --target-date string     Target date (YYYY-MM-DD, or empty to remove)
+  --color string           Project color (hex code)
+
+# Delete/archive project
+linctl project delete <project-id>     # Archive (soft delete)
+linctl project delete <project-id> --permanent  # Permanent delete
+linctl project delete <project-id> --force      # Skip confirmation
 ```
 
 ### User Commands

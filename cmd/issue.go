@@ -925,8 +925,11 @@ Examples:
   linctl issue update LIN-123 --state "In Progress"
   linctl issue update LIN-123 --priority 1
   linctl issue update LIN-123 --due-date "2024-12-31"
+  linctl issue update LIN-123 --estimate 3         # Set estimate to 3 points
+  linctl issue update LIN-123 --estimate -1        # Remove estimate
   linctl issue update LIN-123 --parent LIN-100     # Make sub-issue of LIN-100
   linctl issue update LIN-123 --parent none        # Remove parent (promote to top-level)
+  linctl issue update LIN-123 --related LIN-456    # Mark as related to LIN-456
   linctl issue update LIN-123 --title "New title" --assignee me --priority 2`,
 	Args: cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
@@ -1051,6 +1054,16 @@ Examples:
 			}
 		}
 
+		// Handle estimate update
+		if cmd.Flags().Changed("estimate") {
+			estimate, _ := cmd.Flags().GetFloat64("estimate")
+			if estimate < 0 {
+				input["estimate"] = nil
+			} else {
+				input["estimate"] = estimate
+			}
+		}
+
 		// Handle parent update
 		if cmd.Flags().Changed("parent") {
 			parentValue, _ := cmd.Flags().GetString("parent")
@@ -1079,33 +1092,105 @@ Examples:
 			}
 		}
 
+		// Handle related issue (creates a separate relation, not a field update)
+		var relatedIssueID string
+		if cmd.Flags().Changed("related") {
+			relatedValue, _ := cmd.Flags().GetString("related")
+			// Validate that the related issue exists
+			relatedIssue, err := client.GetIssue(context.Background(), relatedValue)
+			if err != nil {
+				output.Error(fmt.Sprintf("Failed to find related issue '%s': %v", relatedValue, err), plaintext, jsonOut)
+				os.Exit(1)
+			}
+
+			// Prevent self-referencing
+			currentIssueID := args[0]
+			if relatedIssue.Identifier == currentIssueID || relatedIssue.ID == currentIssueID {
+				output.Error("An issue cannot be related to itself", plaintext, jsonOut)
+				os.Exit(1)
+			}
+
+			relatedIssueID = relatedIssue.ID
+		}
+
 		// Check if any updates were specified
-		if len(input) == 0 {
+		hasRelation := relatedIssueID != ""
+		if len(input) == 0 && !hasRelation {
 			output.Error("No updates specified. Use flags to specify what to update.", plaintext, jsonOut)
 			os.Exit(1)
 		}
 
-		// Update the issue
-		issue, err := client.UpdateIssue(context.Background(), args[0], input)
-		if err != nil {
-			output.Error(fmt.Sprintf("Failed to update issue: %v", err), plaintext, jsonOut)
-			os.Exit(1)
+		var issue *api.Issue
+		// Update the issue fields if any were specified
+		if len(input) > 0 {
+			var err error
+			issue, err = client.UpdateIssue(context.Background(), args[0], input)
+			if err != nil {
+				output.Error(fmt.Sprintf("Failed to update issue: %v", err), plaintext, jsonOut)
+				os.Exit(1)
+			}
+		}
+
+		// Create relation if specified
+		var relation *api.IssueRelation
+		if hasRelation {
+			// Get the issue ID if we haven't updated it yet
+			issueID := args[0]
+			if issue != nil {
+				issueID = issue.ID
+			} else {
+				// Need to look up the issue to get its ID
+				lookedUpIssue, err := client.GetIssue(context.Background(), args[0])
+				if err != nil {
+					output.Error(fmt.Sprintf("Failed to find issue '%s': %v", args[0], err), plaintext, jsonOut)
+					os.Exit(1)
+				}
+				issueID = lookedUpIssue.ID
+				issue = lookedUpIssue
+			}
+
+			var err error
+			relation, err = client.CreateIssueRelation(context.Background(), issueID, relatedIssueID, "relates_to")
+			if err != nil {
+				output.Error(fmt.Sprintf("Failed to create relation: %v", err), plaintext, jsonOut)
+				os.Exit(1)
+			}
 		}
 
 		if jsonOut {
-			output.JSON(issue)
+			result := map[string]interface{}{}
+			if issue != nil {
+				result["issue"] = issue
+			}
+			if relation != nil {
+				result["relation"] = relation
+			}
+			output.JSON(result)
 		} else if plaintext {
-			fmt.Printf("Updated issue %s\n", issue.Identifier)
-			if issue.Parent != nil {
+			if len(input) > 0 {
+				fmt.Printf("Updated issue %s\n", issue.Identifier)
+			}
+			if issue != nil && issue.Parent != nil {
 				fmt.Printf("Parent: %s - %s\n", issue.Parent.Identifier, issue.Parent.Title)
 			}
+			if relation != nil {
+				fmt.Printf("Related to: %s - %s\n", relation.RelatedIssue.Identifier, relation.RelatedIssue.Title)
+			}
 		} else {
-			output.Success(fmt.Sprintf("Updated issue %s", issue.Identifier), plaintext, jsonOut)
-			if issue.Parent != nil {
+			if len(input) > 0 {
+				output.Success(fmt.Sprintf("Updated issue %s", issue.Identifier), plaintext, jsonOut)
+			}
+			if issue != nil && issue.Parent != nil {
 				fmt.Printf("  %s Parent: %s - %s\n",
 					color.New(color.FgBlue).Sprint("↳"),
 					color.New(color.FgCyan).Sprint(issue.Parent.Identifier),
 					issue.Parent.Title)
+			}
+			if relation != nil {
+				fmt.Printf("  %s Related to: %s - %s\n",
+					color.New(color.FgMagenta).Sprint("↔"),
+					color.New(color.FgCyan).Sprint(relation.RelatedIssue.Identifier),
+					relation.RelatedIssue.Title)
 			}
 		}
 	},
@@ -1157,5 +1242,7 @@ func init() {
 	issueUpdateCmd.Flags().StringP("state", "s", "", "State name (e.g., 'Todo', 'In Progress', 'Done')")
 	issueUpdateCmd.Flags().Int("priority", -1, "Priority (0=None, 1=Urgent, 2=High, 3=Normal, 4=Low)")
 	issueUpdateCmd.Flags().String("due-date", "", "Due date (YYYY-MM-DD format, or empty to remove)")
+	issueUpdateCmd.Flags().Float64("estimate", -1, "Estimate points (use -1 to remove)")
 	issueUpdateCmd.Flags().String("parent", "", "Parent issue ID or identifier (use 'none' to remove parent)")
+	issueUpdateCmd.Flags().String("related", "", "Mark as related to another issue (by ID or identifier)")
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -1302,6 +1303,11 @@ func (c *Client) UpdateIssue(ctx context.Context, id string, input map[string]in
 						identifier
 						title
 					}
+					project {
+						id
+						name
+						state
+					}
 				}
 			}
 		}
@@ -1697,6 +1703,81 @@ func (c *Client) GetIssueComments(ctx context.Context, issueID string, first int
 	}
 
 	return &response.Issue.Comments, nil
+}
+
+// GetLabels returns all labels in the workspace
+func (c *Client) GetLabels(ctx context.Context, first int, after string) (*Labels, error) {
+	query := `
+		query Labels($first: Int, $after: String) {
+			issueLabels(first: $first, after: $after) {
+				nodes {
+					id
+					name
+					color
+					description
+					parent {
+						id
+						name
+					}
+				}
+			}
+		}
+	`
+
+	variables := map[string]interface{}{
+		"first": first,
+	}
+	if after != "" {
+		variables["after"] = after
+	}
+
+	var response struct {
+		IssueLabels Labels `json:"issueLabels"`
+	}
+
+	err := c.Execute(ctx, query, variables, &response)
+	if err != nil {
+		return nil, err
+	}
+
+	return &response.IssueLabels, nil
+}
+
+// GetProjectByName finds a project by name (case-insensitive partial match)
+func (c *Client) GetProjectByName(ctx context.Context, name string) (*Project, error) {
+	// Get projects and filter by name
+	projects, err := c.GetProjects(ctx, nil, 100, "", "")
+	if err != nil {
+		return nil, err
+	}
+
+	// Try exact match first (case-insensitive)
+	for _, project := range projects.Nodes {
+		if strings.EqualFold(project.Name, name) {
+			return &project, nil
+		}
+	}
+
+	// Try partial match (case-insensitive)
+	var matches []Project
+	lowerName := strings.ToLower(name)
+	for _, project := range projects.Nodes {
+		if strings.Contains(strings.ToLower(project.Name), lowerName) {
+			matches = append(matches, project)
+		}
+	}
+
+	if len(matches) == 1 {
+		return &matches[0], nil
+	} else if len(matches) > 1 {
+		var names []string
+		for _, p := range matches {
+			names = append(names, p.Name)
+		}
+		return nil, fmt.Errorf("multiple projects match '%s': %s", name, strings.Join(names, ", "))
+	}
+
+	return nil, fmt.Errorf("project not found: %s", name)
 }
 
 // CreateComment creates a new comment on an issue

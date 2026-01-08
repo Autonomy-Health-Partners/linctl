@@ -927,6 +927,10 @@ Examples:
   linctl issue update LIN-123 --due-date "2024-12-31"
   linctl issue update LIN-123 --estimate 3         # Set estimate to 3 points
   linctl issue update LIN-123 --estimate -1        # Remove estimate
+  linctl issue update LIN-123 --labels "Bug,High Priority"  # Set labels
+  linctl issue update LIN-123 --labels none        # Remove all labels
+  linctl issue update LIN-123 --project "Q1 Launch"  # Add to project
+  linctl issue update LIN-123 --project none       # Remove from project
   linctl issue update LIN-123 --parent LIN-100     # Make sub-issue of LIN-100
   linctl issue update LIN-123 --parent none        # Remove parent (promote to top-level)
   linctl issue update LIN-123 --related LIN-456    # Mark as related to LIN-456
@@ -1064,6 +1068,76 @@ Examples:
 			}
 		}
 
+		// Handle labels update
+		if cmd.Flags().Changed("labels") {
+			labelsValue, _ := cmd.Flags().GetString("labels")
+			normalizedValue := strings.ToLower(strings.TrimSpace(labelsValue))
+
+			switch normalizedValue {
+			case "none", "null", "":
+				// Remove all labels
+				input["labelIds"] = []string{}
+			default:
+				// Parse comma-separated label names
+				labelNames := strings.Split(labelsValue, ",")
+				for i, name := range labelNames {
+					labelNames[i] = strings.TrimSpace(name)
+				}
+
+				// Lookup labels by name
+				allLabels, err := client.GetLabels(context.Background(), 200, "")
+				if err != nil {
+					output.Error(fmt.Sprintf("Failed to get labels: %v", err), plaintext, jsonOut)
+					os.Exit(1)
+				}
+
+				var labelIds []string
+				for _, labelName := range labelNames {
+					if labelName == "" {
+						continue
+					}
+					found := false
+					for _, label := range allLabels.Nodes {
+						if strings.EqualFold(label.Name, labelName) {
+							labelIds = append(labelIds, label.ID)
+							found = true
+							break
+						}
+					}
+					if !found {
+						// Show available labels
+						var availableLabels []string
+						for _, label := range allLabels.Nodes {
+							availableLabels = append(availableLabels, label.Name)
+						}
+						output.Error(fmt.Sprintf("Label '%s' not found. Available labels: %s", labelName, strings.Join(availableLabels, ", ")), plaintext, jsonOut)
+						os.Exit(1)
+					}
+				}
+				input["labelIds"] = labelIds
+			}
+		}
+
+		// Handle project update
+		if cmd.Flags().Changed("project") {
+			projectValue, _ := cmd.Flags().GetString("project")
+			normalizedValue := strings.ToLower(strings.TrimSpace(projectValue))
+
+			switch normalizedValue {
+			case "none", "null", "":
+				// Remove from project
+				input["projectId"] = nil
+			default:
+				// Lookup project by name
+				project, err := client.GetProjectByName(context.Background(), projectValue)
+				if err != nil {
+					output.Error(fmt.Sprintf("Failed to find project: %v", err), plaintext, jsonOut)
+					os.Exit(1)
+				}
+				input["projectId"] = project.ID
+			}
+		}
+
 		// Handle parent update
 		if cmd.Flags().Changed("parent") {
 			parentValue, _ := cmd.Flags().GetString("parent")
@@ -1150,7 +1224,7 @@ Examples:
 			}
 
 			var err error
-			relation, err = client.CreateIssueRelation(context.Background(), issueID, relatedIssueID, "relates_to")
+			relation, err = client.CreateIssueRelation(context.Background(), issueID, relatedIssueID, "related")
 			if err != nil {
 				output.Error(fmt.Sprintf("Failed to create relation: %v", err), plaintext, jsonOut)
 				os.Exit(1)
@@ -1170,6 +1244,16 @@ Examples:
 			if len(input) > 0 {
 				fmt.Printf("Updated issue %s\n", issue.Identifier)
 			}
+			if issue != nil && issue.Labels != nil && len(issue.Labels.Nodes) > 0 {
+				var labelNames []string
+				for _, label := range issue.Labels.Nodes {
+					labelNames = append(labelNames, label.Name)
+				}
+				fmt.Printf("Labels: %s\n", strings.Join(labelNames, ", "))
+			}
+			if issue != nil && issue.Project != nil {
+				fmt.Printf("Project: %s\n", issue.Project.Name)
+			}
 			if issue != nil && issue.Parent != nil {
 				fmt.Printf("Parent: %s - %s\n", issue.Parent.Identifier, issue.Parent.Title)
 			}
@@ -1179,6 +1263,20 @@ Examples:
 		} else {
 			if len(input) > 0 {
 				output.Success(fmt.Sprintf("Updated issue %s", issue.Identifier), plaintext, jsonOut)
+			}
+			if issue != nil && issue.Labels != nil && len(issue.Labels.Nodes) > 0 {
+				var labelNames []string
+				for _, label := range issue.Labels.Nodes {
+					labelNames = append(labelNames, label.Name)
+				}
+				fmt.Printf("  %s Labels: %s\n",
+					color.New(color.FgYellow).Sprint("🏷"),
+					color.New(color.FgWhite).Sprint(strings.Join(labelNames, ", ")))
+			}
+			if issue != nil && issue.Project != nil {
+				fmt.Printf("  %s Project: %s\n",
+					color.New(color.FgBlue).Sprint("📁"),
+					color.New(color.FgCyan).Sprint(issue.Project.Name))
 			}
 			if issue != nil && issue.Parent != nil {
 				fmt.Printf("  %s Parent: %s - %s\n",
@@ -1243,6 +1341,8 @@ func init() {
 	issueUpdateCmd.Flags().Int("priority", -1, "Priority (0=None, 1=Urgent, 2=High, 3=Normal, 4=Low)")
 	issueUpdateCmd.Flags().String("due-date", "", "Due date (YYYY-MM-DD format, or empty to remove)")
 	issueUpdateCmd.Flags().Float64("estimate", -1, "Estimate points (use -1 to remove)")
+	issueUpdateCmd.Flags().StringP("labels", "l", "", "Comma-separated label names (use 'none' to remove all labels)")
+	issueUpdateCmd.Flags().String("project", "", "Project name (use 'none' to remove from project)")
 	issueUpdateCmd.Flags().String("parent", "", "Parent issue ID or identifier (use 'none' to remove parent)")
 	issueUpdateCmd.Flags().String("related", "", "Mark as related to another issue (by ID or identifier)")
 }
